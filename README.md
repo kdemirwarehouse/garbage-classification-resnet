@@ -185,9 +185,3 @@ dataset/raw/
 - **Pillow** — image loading in path-based datasets
 - **pandas** — results tables
 - **Jupyter Notebook**
-
----
-
-## 📝 License
-
-This project is open source and available under the [MIT License](LICENSE).
