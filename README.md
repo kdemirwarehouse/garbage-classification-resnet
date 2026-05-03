@@ -1,21 +1,20 @@
 # 🗑️ Garbage Classification with ResNet18
 
-A deep learning project that classifies garbage images into 6 categories using PyTorch. Started with a custom CNN, then upgraded to a pretrained **ResNet18** — and the results speak for themselves.
+A deep learning project that classifies garbage images into 6 categories using PyTorch.
+Started with a custom CNN, upgraded to pretrained ResNet18, then extended with class balancing, interpretability tools, multi-model benchmarking, and k-fold cross validation.
 
 ---
 
-## 🎯 What Does It Do?
-
-Given an image of garbage, the model predicts which of these 6 categories it belongs to:
+## 🎯 Categories
 
 | Class | Label |
 |---|---|
-| 📦 Cardboard | 0 |
-| 🍾 Glass | 1 |
-| 🔩 Metal | 2 |
-| 📄 Paper | 3 |
-| 🧴 Plastic | 4 |
-| 🗑️ Trash | 5 |
+| Cardboard | 0 |
+| Glass | 1 |
+| Metal | 2 |
+| Paper | 3 |
+| Plastic | 4 |
+| Trash | 5 |
 
 ---
 
@@ -23,36 +22,103 @@ Given an image of garbage, the model predicts which of these 6 categories it bel
 
 Based on the [Garbage Classification Dataset](https://www.kaggle.com/datasets/asdasdasasdas/garbage-classification) from Kaggle.
 
-- **Total images:** ~2,527
-- **Split:** 70% train / 15% val / 15% test
+- **Total images:** 2,527
+- **Split:** 70% train / 15% val / 15% test — per-class (stratified), `random.seed(42)`
 
-| Class | Total |
-|---|---|
-| Cardboard | 403 |
-| Glass | 501 |
-| Metal | 410 |
-| Paper | 594 |
-| Plastic | 482 |
-| Trash | 137 |
+| Class | Total | Train | Val | Test |
+|---|---|---|---|---|
+| Cardboard | 403 | 282 | 60 | 61 |
+| Glass | 501 | 351 | 75 | 75 |
+| Metal | 410 | 287 | 62 | 61 |
+| Paper | 594 | 416 | 89 | 89 |
+| Plastic | 482 | 337 | 73 | 72 |
+| **Trash** | **137** | **96** | **21** | **20** |
+
+> **Class imbalance:** Trash has 4.6× fewer images than Paper. Addressed with WeightedRandomSampler, weighted loss, and class-specific augmentation.
+
+---
+
+## ⚙️ Training Pipeline
+
+### Class Imbalance Handling
+- **ClassAwareDataset** — path-based dataset; trash images receive stronger augmentation (RandomCrop, Flip, Rotation, ColorJitter, RandomGrayscale)
+- **WeightedRandomSampler** — each batch is class-balanced at sampling time
+- **Weighted CrossEntropyLoss** — rare classes carry higher loss weight
+
+### Training Improvements
+- **CosineAnnealingLR** — learning rate decays smoothly from `1e-4` to `1e-6`
+- **EarlyStopping** — stops when val loss stalls for `patience=5` epochs; restores best checkpoint
+- **Mixed Precision (AMP)** — FP16 forward pass + FP32 weight update via `GradScaler` (~1.5–2× GPU speedup)
 
 ---
 
 ## 🧠 Models
 
 ### 1. Custom CNN (Baseline)
-A lightweight 3-layer convolutional network built from scratch.
+Lightweight 3-layer convolutional network built from scratch.
 
 ```
-Conv2d → ReLU → MaxPool  (x3)
+Conv2d → ReLU → MaxPool  (×3)
 → Flatten → Linear(128) → Linear(6)
 ```
 
 **Result:** ~78.6% validation accuracy
 
 ### 2. ResNet18 (Fine-tuned) ⭐
-Pretrained on ImageNet, with the final fully connected layer replaced for 6-class output.
+Pretrained on ImageNet, final FC layer replaced for 6-class output.
+Trained with the full pipeline above (class balancing + AMP + EarlyStopping + CosineAnnealingLR).
 
-**Result:** 99.4% val accuracy / **99.3% test accuracy** 🔥
+**Result:** 99.4% val accuracy / **99.3% test accuracy**
+
+### 3. Multi-model Benchmark (TIMM)
+Five architectures fine-tuned under identical conditions using [timm](https://github.com/huggingface/pytorch-image-models):
+
+| Model | Params (M) | Inference (ms/img) | Test Acc |
+|---|---|---|---|
+| ResNet-18 | 11.18 | — | — |
+| ResNet-50 | 23.52 | — | — |
+| EfficientNet-B0 | 4.01 | — | — |
+| MobileNetV3-L | 4.21 | — | — |
+| ViT-Tiny/16 | 5.72 | — | — |
+
+> Benchmark values are populated after running the notebook.
+
+---
+
+## 🔍 Interpretability
+
+- **Confusion Matrix** — seaborn heatmap on the test set
+- **Precision / Recall / F1** — per-class classification report
+- **Misclassified Examples** — grid view of wrong predictions with true/predicted labels
+- **Grad-CAM** — gradient-weighted class activation maps on `layer4[-1]`; shows which pixels drove each prediction
+
+---
+
+## 🔁 K-Fold Cross Validation
+
+A separate notebook (`garbage-classification-kfold.ipynb`) implements a rigorous evaluation pipeline:
+
+1. Stratified holdout split — **85% trainval / 15% test**, fixed seed, done once
+2. `StratifiedKFold(n_splits=5)` on trainval only
+3. Each fold: fresh ResNet18 + WeightedRandomSampler + AMP + EarlyStopping + CosineAnnealingLR
+4. **Result:** mean ± std val accuracy across 5 folds
+5. **Final model:** retrained on all trainval for the average best-epoch count, evaluated on holdout test
+
+> The holdout test set is never seen during k-fold — only used for the final model's single evaluation.
+
+---
+
+## 📈 Experiment Tracking
+
+All runs are logged to [Weights & Biases](https://wandb.ai):
+
+| W&B Run | Logs |
+|---|---|
+| `resnet18-balanced` | per-epoch loss/acc/lr, confusion matrix, Grad-CAM, misclassified examples |
+| `ResNet-18` … `ViT-Tiny/16` | benchmark runs: loss curves, test accuracy, inference time |
+| `kfold-v1 / fold-1…5` | per-fold train/val loss, best checkpoint accuracy |
+| `kfold-v1 / kfold-summary` | mean ± std table |
+| `kfold-v1 / final-model` | final training curve + holdout test accuracy |
 
 ---
 
@@ -60,17 +126,20 @@ Pretrained on ImageNet, with the final fully connected layer replaced for 6-clas
 
 ```
 garbage_classification/
-├── dataset/
+├── data/
 │   ├── raw/          # original images (6 class folders)
 │   ├── train/        # 70% — auto-generated by notebook
 │   ├── val/          # 15% — auto-generated by notebook
 │   └── test/         # 15% — auto-generated by notebook
-├── garbage-classification-resnet.ipynb
+├── notebooks/
+│   ├── garbage-classification-resnet.ipynb         # main notebook (yerel)
+│   ├── garbage-classification-resnet-kaggle.ipynb  # Kaggle-uyumlu tam pipeline
+│   └── garbage-classification-kfold.ipynb          # k-fold cross validation
 ├── .gitignore
 └── README.md
 ```
 
-> ⚠️ The `dataset/` folder is **not included** in this repo due to size. Download it from Kaggle and place images under `dataset/raw/<class_name>/`. The notebook handles the train/val/test split automatically.
+> ⚠️ The `dataset/` folder is not included due to size. Download from Kaggle and place images under `dataset/raw/<class_name>/`.
 
 ---
 
@@ -84,11 +153,11 @@ cd garbage-classification
 
 ### 2. Install dependencies
 ```bash
-pip install torch torchvision pillow matplotlib
+pip install torch torchvision pillow matplotlib seaborn scikit-learn pandas timm wandb
 ```
 
 ### 3. Prepare the dataset
-Download from [Kaggle](https://www.kaggle.com/datasets/asdasdasasdas/garbage-classification) and organize like this:
+Download from [Kaggle](https://www.kaggle.com/datasets/asdasdasasdas/garbage-classification) and place under:
 ```
 dataset/raw/
 ├── cardboard/
@@ -99,32 +168,22 @@ dataset/raw/
 └── trash/
 ```
 
-### 4. Run the notebook
-Open `garbage-classification-resnet.ipynb` in Jupyter and run all cells. The notebook will:
-1. Split the dataset into train / val / test
-2. Train a simple custom CNN
-3. Fine-tune a pretrained ResNet18
-4. Evaluate and print accuracy
-
----
-
-## 📈 Results Summary
-
-| Model | Val Accuracy | Test Accuracy |
-|---|---|---|
-| Custom CNN | 78.6% | — |
-| ResNet18 (fine-tuned) | **99.4%** | **99.3%** |
-
-Transfer learning wins — by a mile.
+### 4. Run
+- **Main notebook:** `notebooks/garbage-classification-resnet.ipynb` — full pipeline from split to Grad-CAM and benchmark
+- **Kaggle notebook:** `notebooks/garbage-classification-resnet-kaggle.ipynb` — aynı tam pipeline, Kaggle ortamında da çalışır (`IS_KAGGLE` flag ile yol/worker ayarı otomatik)
+- **K-fold notebook:** `notebooks/garbage-classification-kfold.ipynb` — cross validation + final model
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Python** 3.x
-- **PyTorch** + **torchvision**
-- **Pillow** (PIL)
-- **Matplotlib**
+- **PyTorch** + **torchvision** — model training, AMP, DataLoader
+- **timm** — pretrained model zoo for benchmarking
+- **scikit-learn** — stratified splits, confusion matrix, classification report
+- **Weights & Biases** — experiment tracking
+- **seaborn** / **matplotlib** — visualizations
+- **Pillow** — image loading in path-based datasets
+- **pandas** — results tables
 - **Jupyter Notebook**
 
 ---
